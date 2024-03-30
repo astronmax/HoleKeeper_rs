@@ -13,7 +13,7 @@ pub enum NatType {
     Symmetric,
 }
 
-const STUN_SERVERS: [&str; 2] = ["108.177.14.127:19302", "216.93.246.18:3478"];
+pub const STUN_SERVERS: [&str; 2] = ["108.177.14.127:19302", "216.93.246.18:3478"];
 
 pub async fn get_remote_address(
     socket: Arc<UdpSocket>,
@@ -51,7 +51,7 @@ pub async fn get_nat_type() -> Result<NatType, Error> {
 
     let addr_2 = get_remote_address(
         socket_ptr.clone(),
-        SocketAddr::from_str(STUN_SERVERS[0]).unwrap(),
+        SocketAddr::from_str(STUN_SERVERS[1]).unwrap(),
     )
     .await?;
 

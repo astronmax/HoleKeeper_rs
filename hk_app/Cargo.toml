@@ -1,0 +1,8 @@
+[package]
+name = "hk_app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hk_core = { path = "../hk_core" }
+tokio = { version = "1", features = ["full"] }

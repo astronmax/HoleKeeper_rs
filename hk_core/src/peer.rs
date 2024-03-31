@@ -17,17 +17,13 @@ impl Peer {
     const ADDRESS_LEN: usize = 6;
     const LEN: usize = Peer::NICKNAME_LEN + (Peer::ADDRESS_LEN * 2) + 1;
 
-    pub fn new(nickname: String) -> Result<Self, Error> {
-        if nickname.len() > Peer::NICKNAME_LEN {
-            return Err(Error::new(ErrorKind::InvalidData, "Nickname is too long"));
-        }
-
-        Ok(Self {
-            nickname: nickname,
+    pub fn new() -> Self {
+        Self {
+            nickname: "".to_string(),
             address: SocketAddr::from_str("0.0.0.0:0").unwrap(),
             turn_use: false,
             turn_server: SocketAddr::from_str("0.0.0.0:0").unwrap(),
-        })
+        }
     }
 
     pub fn pack(&self) -> Vec<u8> {
@@ -68,7 +64,7 @@ impl Peer {
         }
 
         let nickname = match std::str::from_utf8(&raw_data[0..Peer::NICKNAME_LEN]) {
-            Ok(v) => v,
+            Ok(v) => v.replace('\0', ""),
             Err(e) => return Err(Error::new(ErrorKind::InvalidData, e.to_string())),
         };
 
@@ -86,7 +82,7 @@ impl Peer {
                     packed_addr[2],
                     packed_addr[3],
                 )),
-                ((packed_addr[4] << 8) | packed_addr[5]) as u16,
+                ((packed_addr[4] as u16) << 8_u8) | (packed_addr[5] as u16),
             ))
         };
 
@@ -103,11 +99,24 @@ impl Peer {
         };
 
         Ok(Self {
-            nickname: nickname.to_string(),
+            nickname: nickname,
             address: address,
             turn_use: turn_use,
             turn_server: turn_address,
         })
+    }
+
+    pub fn set_nickname(&mut self, nickname: String) -> Result<(), Error> {
+        if nickname.len() > Peer::NICKNAME_LEN {
+            return Err(Error::new(ErrorKind::InvalidData, "Nickname is too long"));
+        }
+
+        self.nickname = nickname;
+        Ok(())
+    }
+
+    pub fn get_nickname(&self) -> &String {
+        &self.nickname
     }
 
     pub fn set_address(&mut self, addr: SocketAddr) {
@@ -121,6 +130,14 @@ impl Peer {
     pub fn set_turn_server(&mut self, addr: SocketAddr) {
         self.turn_use = true;
         self.turn_server = addr;
+    }
+
+    pub fn disable_turn_server(&mut self) {
+        self.turn_use = false;
+    }
+
+    pub fn get_turn_server(&self) -> SocketAddr {
+        self.turn_server
     }
 
     pub fn using_turn(&self) -> bool {

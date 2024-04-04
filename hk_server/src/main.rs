@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::HashMap,
     net::SocketAddr,
     str::FromStr,
     sync::{Arc, Mutex},
@@ -8,11 +8,17 @@ use std::{
 use std::net::UdpSocket;
 
 type BinStruct = Vec<u8>;
-type DataType = Arc<Mutex<VecDeque<BinStruct>>>;
+type ClientsList = HashMap<SocketAddr, (BinStruct, std::time::Duration)>;
 
 struct Server {
     address: SocketAddr,
-    data: DataType,
+    clients: Arc<Mutex<ClientsList>>,
+}
+
+fn get_time_now() -> std::time::Duration {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
 }
 
 impl Server {
@@ -31,16 +37,31 @@ impl Server {
 
         Ok(Self {
             address: addr,
-            data: Arc::new(Mutex::new(VecDeque::new())),
+            clients: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
     pub async fn start(&self) -> Result<(), std::io::Error> {
         {
-            let data_clone = self.data.clone();
+            let pause = std::time::Duration::from_secs(30);
+            let clients_clone = self.clients.clone();
             std::thread::spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_secs(60));
-                data_clone.lock().unwrap().pop_front();
+                std::thread::sleep(pause);
+                let mut clients = clients_clone.lock().unwrap();
+                let time_now = get_time_now();
+                let mut clients_to_remove = Vec::new();
+                for client in clients.keys() {
+                    let (_, last_request) = clients.get(client).unwrap();
+                    if time_now - *last_request > pause {
+                        clients_to_remove.push(client.clone());
+                    }
+                }
+
+                for c in clients_to_remove {
+                    println!("[INFO] Client {} has been removed", c);
+                    clients.remove(&c);
+                    println!("[INFO] Online: {}", clients.len());
+                }
             });
         }
 
@@ -52,59 +73,60 @@ impl Server {
             let (_, from_addr) = socket_ptr.recv_from(&mut buf)?;
 
             let socket_clone = socket_ptr.clone();
-            let data_clone = self.data.clone();
+            let clients_mtx = self.clients.clone();
             tokio::spawn(async move {
                 match buf[0] {
-                    0x01 => Server::process_add(buf, data_clone),
-                    0x02 => Server::process_get(socket_clone, from_addr, data_clone),
+                    0x01 => Server::process_add(buf, from_addr, clients_mtx),
+                    0x02 => Server::process_get(socket_clone, from_addr, clients_mtx),
                     _ => return,
                 };
             });
         }
     }
 
-    fn process_add(buf: [u8; Server::BUFFER_SIZE], data_ptr: DataType) {
-        // TODO: size of structure (first two bytes)
-        let binary_struct = buf[1..].to_vec();
-        data_ptr.lock().unwrap().push_back(binary_struct);
+    fn process_add(
+        buf: [u8; Server::BUFFER_SIZE],
+        addr: SocketAddr,
+        clients_mtx: Arc<Mutex<ClientsList>>,
+    ) {
+        let length = ((buf[1] as usize) << 8) | (buf[2] as usize);
+        if length > 0 && length < Server::BUFFER_SIZE - 3 {
+            let binary_struct = buf[3..(3 + length)].to_vec();
+            clients_mtx
+                .lock()
+                .unwrap()
+                .insert(addr, (binary_struct, get_time_now()));
+        }
     }
 
-    fn process_get(socket: Arc<UdpSocket>, from_addr: SocketAddr, data_ptr: DataType) {
-        let data = data_ptr.lock().unwrap();
+    fn process_get(socket: Arc<UdpSocket>, addr: SocketAddr, clients_mtx: Arc<Mutex<ClientsList>>) {
+        let clients = clients_mtx.lock().unwrap();
         let mut response = [0_u8; Server::BUFFER_SIZE];
 
         let mut offset: usize = 0;
-        let mut empty = true;
-        for frame in data.iter() {
+        for (frame, _) in clients.values() {
             if offset + frame.len() + 2 > response.len() {
-                // response is full, send package
                 socket
-                    .send_to(&response, from_addr)
+                    .send_to(&response, addr)
                     .expect("Can't send response");
-                empty = true;
-            } else {
-                // add frame size
-                response[offset] = (frame.len() >> 8_usize) as u8;
-                response[offset + 1] = (frame.len() & 0xFF_usize) as u8;
-                offset += 2;
 
-                // add frame data
-                response[offset..(offset + frame.len())].copy_from_slice(frame.as_slice());
-                offset += frame.len();
-
-                empty = false;
+                response.fill(0);
+                offset = 0;
             }
+            response[offset] = (frame.len() >> 8_usize) as u8;
+            response[offset + 1] = (frame.len() & 0xFF_usize) as u8;
+            offset += 2;
+
+            response[offset..(offset + frame.len())].copy_from_slice(frame.as_slice());
+            offset += frame.len();
         }
 
-        if !empty {
-            socket
-                .send_to(&response, from_addr)
-                .expect("Can't send response");
-        }
-
-        // no more packages
         socket
-            .send_to(&[0xFF, 0xFF, 0xFF, 0xFF], from_addr)
+            .send_to(&response, addr)
+            .expect("Can't send response");
+
+        socket
+            .send_to(&[0xFF, 0xFF, 0xFF, 0xFF], addr)
             .expect("Can't send response");
     }
 }
